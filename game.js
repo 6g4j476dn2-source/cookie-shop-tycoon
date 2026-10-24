@@ -3,8 +3,14 @@ const STORAGE_KEY = 'james-cookie-shop-v1';
 const $ = id => document.getElementById(id);
 const money = value => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
 const round = n => Math.round(n * 100) / 100;
+const VARIETIES = [
+  { id: 'classic', name: 'Chocolate chip', emoji: '🍪', cost: .5, price: 2, share: .5 },
+  { id: 'double', name: 'Double chocolate', emoji: '🍫', cost: .75, price: 2.75, share: .3 },
+  { id: 'oat', name: 'Oatmeal raisin', emoji: '🌾', cost: .4, price: 1.75, share: .2 }
+];
 const fresh = () => ({ cash: 100, history: [] });
 let state = fresh();
+$('variety-plans').innerHTML = VARIETIES.map(v => `<fieldset class="variety-card"><legend>${v.emoji} ${v.name}</legend><p>${money(v.cost)} ingredients each · suggested ${money(v.price)}</p><div class="variety-inputs"><div><label for="quantity-${v.id}">Bake quantity</label><div class="input-wrap"><input id="quantity-${v.id}" type="number" min="0" max="10000" step="1" value="${v.id === 'classic' ? 40 : 10}" required><span>cookies</span></div></div><div><label for="price-${v.id}">Selling price</label><div class="input-wrap"><span>$</span><input id="price-${v.id}" type="number" min="0.25" max="50" step="0.05" value="${v.price.toFixed(2)}" required></div></div></div></fieldset>`).join('');
 let serving = false;
 let customerTimers = [];
 const customerScene = document.createElement('div');
@@ -63,7 +69,7 @@ function animateCustomers(sold) {
 }
 try {
   const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-  if (saved && Number.isFinite(saved.cash) && saved.cash >= 0 && Array.isArray(saved.history) && saved.history.length <= 30 && saved.history.every(r => ['day','quantity','sold','price','ads','revenue','expense','profit','cash'].every(k => Number.isFinite(r[k])))) state = saved;
+  if (saved && Number.isFinite(saved.cash) && saved.cash >= 0 && Array.isArray(saved.history) && saved.history.length <= 30 && saved.history.every(r => ['day','quantity','sold','price','ads','revenue','expense','profit','cash'].every(k => Number.isFinite(r[k])) && (!r.varieties || (Array.isArray(r.varieties) && r.varieties.length === VARIETIES.length && r.varieties.every((v, i) => v.id === VARIETIES[i].id && ['quantity','price','sold','revenue'].every(k => Number.isFinite(v[k]) && v[k] >= 0) && v.sold <= v.quantity))))) state = saved;
 } catch { /* Storage is optional when opened as a local file. */ }
 const forecasts = [
   { title: 'A fresh start', text: 'The neighborhood is ready to discover your cookies.', factor: 1 },
@@ -73,11 +79,15 @@ const forecasts = [
   { title: 'An ordinary, lovely day', text: 'Steady foot traffic and plenty of cookie possibilities.', factor: 1 }
 ];
 function forecast() { return forecasts[state.history.length % forecasts.length]; }
-function finished() { return state.history.length >= 30 || state.cash < 5.5; }
-function plan() { return { quantity: Number($('quantity').value), price: Number($('price').value), ads: Number($('advertising').value) }; }
+function finished() { return state.history.length >= 30 || state.cash < 5.4; }
+function plan() {
+  const varieties = VARIETIES.map(v => ({ ...v, quantity: Number($('quantity-' + v.id).value), price: Number($('price-' + v.id).value) }));
+  return { varieties, quantity: varieties.reduce((n, v) => n + v.quantity, 0), ingredients: round(varieties.reduce((n, v) => n + v.quantity * v.cost, 0)), ads: Number($('advertising').value) };
+}
 function updateEstimate() {
-  const p = plan(), expense = round(p.quantity * .5 + p.ads + 5);
-  $('ingredient-cost').textContent = money(p.quantity * .5);
+  const p = plan(), expense = round(p.ingredients + p.ads + 5);
+  for (const input of $('plan-form').querySelectorAll('input')) input.disabled = finished() || serving;
+  $('ingredient-cost').textContent = money(p.ingredients);
   $('ad-cost').textContent = money(p.ads);
   $('cost').textContent = money(expense);
   $('error').textContent = !finished() && expense > state.cash ? 'This batch is over budget. Reduce your cookies or advertising.' : '';
@@ -93,8 +103,12 @@ function showResult(r) {
   $('sold').textContent = `${r.sold} / ${r.quantity}`;
   for (const [id, value] of Object.entries({ revenue: r.revenue, expense: r.expense, profit: r.profit, remaining: r.cash })) $(id).textContent = money(value);
   $('profit').className = r.profit >= 0 ? 'positive' : 'negative';
+  $('variety-results').innerHTML = r.varieties ? '<h3>Your cookie mix</h3>' + r.varieties.map(v => {
+    const info = VARIETIES.find(item => item.id === v.id);
+    return `<div class="variety-result"><span>${info.emoji} ${info.name}<small>${v.sold} / ${v.quantity} sold at ${money(v.price)}</small></span><strong>${money(v.revenue)}</strong></div>`;
+  }).join('') : '<p class="result-note">Chocolate chip batch from your original shop.</p>';
   const waste = r.quantity - r.sold;
-  $('result-note').textContent = `${waste} unsold ${waste === 1 ? 'cookie was' : 'cookies were'} cleared at closing. Expenses include ${money(r.quantity * .5)} in ingredients, ${money(r.ads)} in advertising, and $5.00 in overhead.`;
+  $('result-note').textContent = `${waste} unsold ${waste === 1 ? 'cookie was' : 'cookies were'} cleared at closing. Expenses include ${money(r.ingredients ?? r.quantity * .5)} in ingredients, ${money(r.ads)} in advertising, and $5.00 in overhead.`;
 }
 function render() {
   const count = state.history.length, done = finished();
@@ -105,17 +119,17 @@ function render() {
   $('planning-day').textContent = done ? 'THE OVENS ARE RESTING' : `DAY ${String(count + 1).padStart(2, '0')} · THE OVENS ARE READY`;
   $('forecast-title').textContent = forecast().title;
   $('forecast-text').textContent = forecast().text;
-  for (const id of ['quantity', 'price', 'advertising']) $(id).disabled = done;
+  for (const input of $('plan-form').querySelectorAll('input')) input.disabled = done || serving;
   $('history-count').textContent = `${count} ${count === 1 ? 'day' : 'days'} in the books`;
   $('history-empty').hidden = count > 0;
   $('history-table').hidden = count === 0;
-  $('ledger').innerHTML = [...state.history].reverse().map(r => `<tr><td>Day ${r.day}</td><td>${r.quantity} / ${r.sold}</td><td>${money(r.price)}</td><td>${money(r.ads)}</td><td>${money(r.revenue)}</td><td>${money(r.expense)}</td><td class="${r.profit >= 0 ? 'positive' : 'negative'}">${money(r.profit)}</td><td>${money(r.cash)}</td></tr>`).join('');
+  $('ledger').innerHTML = [...state.history].reverse().map(r => `<tr><td>Day ${r.day}</td><td>${r.quantity} / ${r.sold}</td><td>${r.varieties ? r.varieties.map(v => { const info = VARIETIES.find(item => item.id === v.id); return `${info.emoji} ${v.quantity}/${v.sold} @ ${money(v.price)}`; }).join('<br>') : money(r.price)}</td><td>${money(r.ads)}</td><td>${money(r.revenue)}</td><td>${money(r.expense)}</td><td class="${r.profit >= 0 ? 'positive' : 'negative'}">${money(r.profit)}</td><td>${money(r.cash)}</td></tr>`).join('');
   if (count) showResult(state.history[count - 1]);
   else { $('empty-results').hidden = false; $('daily-results').hidden = true; $('result-title').textContent = 'Your story starts here'; }
   $('end-game').hidden = !done;
   if (done) {
     $('end-title').textContent = count >= 30 ? 'Thirty days. Your very own cookie story.' : 'Time to hang up the apron.';
-    $('end-description').textContent = `${count >= 30 ? 'You completed your 30-day run!' : 'You need at least $5.50 to cover overhead and bake one cookie.'} You finished with ${money(state.cash)}, a total ${state.cash >= 100 ? 'profit' : 'loss'} of ${money(Math.abs(round(state.cash - 100)))}, and ${state.history.reduce((n, r) => n + r.sold, 0)} cookies sold.`;
+    $('end-description').textContent = `${count >= 30 ? 'You completed your 30-day run!' : 'You need at least $5.40 to cover overhead and bake one cookie.'} You finished with ${money(state.cash)}, a total ${state.cash >= 100 ? 'profit' : 'loss'} of ${money(Math.abs(round(state.cash - 100)))}, and ${state.history.reduce((n, r) => n + r.sold, 0)} cookies sold.`;
   }
   updateEstimate();
 }
@@ -125,17 +139,24 @@ $('plan-form').addEventListener('submit', event => {
   event.preventDefault();
   if (serving || finished() || !$('plan-form').reportValidity()) return;
   const p = plan();
-  if (!Number.isInteger(p.quantity) || p.quantity < 0 || p.quantity > 10000 || !Number.isFinite(p.price) || p.price < .25 || p.price > 50 || !Number.isFinite(p.ads) || p.ads < 0 || p.ads > 1000000) return;
-  const expense = round(p.quantity * .5 + p.ads + 5);
+  if (p.varieties.some(v => !Number.isInteger(v.quantity) || v.quantity < 0 || v.quantity > 10000 || !Number.isFinite(v.price) || v.price < .25 || v.price > 50) || !Number.isFinite(p.ads) || p.ads < 0 || p.ads > 1000000) return;
+  const expense = round(p.ingredients + p.ads + 5);
   if (expense > state.cash) { updateEstimate(); return; }
-  // Price sensitivity and diminishing advertising returns reward experimentation.
-  const demand = Math.max(0, Math.round((48 + 22 * Math.sqrt(p.ads) + state.history.length * 1.2) * Math.exp((2 - p.price) * .72) * forecast().factor * (.85 + Math.random() * .3)));
-  const sold = Math.min(p.quantity, demand), revenue = round(sold * p.price), profit = round(revenue - expense);
+  // Stocked varieties share one audience, weighted by their popularity.
+  const activeShare = p.varieties.filter(v => v.quantity > 0).reduce((n, v) => n + v.share, 0);
+  const audience = (48 + 22 * Math.sqrt(p.ads) + state.history.length * 1.2) * forecast().factor * (.85 + Math.random() * .3);
+  const varieties = p.varieties.map(v => {
+    const demand = v.quantity ? Math.max(0, Math.round(audience * v.share / activeShare * Math.exp((VARIETIES.find(item => item.id === v.id).price - v.price) * .72))) : 0;
+    const sold = Math.min(v.quantity, demand);
+    return { id: v.id, quantity: v.quantity, price: v.price, sold, revenue: round(sold * v.price) };
+  });
+  const sold = varieties.reduce((n, v) => n + v.sold, 0);
+  const revenue = round(varieties.reduce((n, v) => n + v.revenue, 0)), profit = round(revenue - expense);
   state.cash = round(state.cash + profit);
-  state.history.push({ day: state.history.length + 1, ...p, sold, revenue, expense, profit, cash: state.cash });
+  state.history.push({ day: state.history.length + 1, quantity: p.quantity, price: sold ? round(revenue / sold) : 0, ingredients: p.ingredients, ads: p.ads, varieties, sold, revenue, expense, profit, cash: state.cash });
   save(); render(); animateCustomers(sold);
 });
-function reset() { stopCustomers(); state = fresh(); $('quantity').value = 60; $('price').value = '2.00'; $('advertising').value = '5.00'; save(); render(); }
+function reset() { stopCustomers(); state = fresh(); for (const v of VARIETIES) { $('quantity-' + v.id).value = v.id === 'classic' ? 40 : 10; $('price-' + v.id).value = v.price.toFixed(2); } $('advertising').value = '5.00'; save(); render(); }
 $('reset').addEventListener('click', () => { if (confirm('Start over with $100? Your current shop history will be cleared.')) reset(); });
 $('play-again').addEventListener('click', reset);
 render();
